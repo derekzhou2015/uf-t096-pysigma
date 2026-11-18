@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Literal, TYPE_CHECKING
+from typing import Literal, Self, TYPE_CHECKING
 from sigma.correlations import SigmaCorrelationRule
 from sigma.processing.regex import ProcessingRegularExpressionMixin
 from sigma.types import SigmaFieldReference, SigmaType
@@ -34,6 +34,17 @@ class ProcessingCondition(ProcessingRegularExpressionMixin, ABC):
 
     def _clear_pipeline(self) -> None:
         self._pipeline = None
+
+    def _clone_for_merge(self) -> Self:
+        """Create an unbound copy of this condition for use in a merged pipeline.
+
+        The copy keeps all configuration parameters but is detached from the source pipeline.
+        Conditions holding compiled regex patterns or nested condition objects must extend this
+        method to detach them as well.
+        """
+        clone = self._clone_without_regex_cache()
+        clone._pipeline = None
+        return clone
 
 
 @dataclass

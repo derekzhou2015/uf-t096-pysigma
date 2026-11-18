@@ -1,7 +1,7 @@
 from dataclasses import dataclass, field
 
 from sigma.processing.conditions.base import FieldNameProcessingCondition
-from typing import Literal
+from typing import Literal, Self
 from sigma.policy.regex_engine import RegexPattern
 from sigma.rule import SigmaDetectionItem
 from sigma.exceptions import SigmaConfigurationError
@@ -22,16 +22,7 @@ class IncludeFieldCondition(FieldNameProcessingCondition):
         if self.mode == "plain":
             pass
         elif self.mode == "re":
-            engine = self.resolve_regex_engine()
-            compiled = []
-            for field_pattern in self.fields:
-                try:
-                    compiled.append(engine.compile(field_pattern))
-                except engine.error as e:
-                    raise SigmaConfigurationError(
-                        f"Regular expression '{field_pattern}' in field name condition is invalid: {e}"
-                    ) from e
-            self.patterns = compiled
+            self._compile_patterns()
         else:
             raise SigmaConfigurationError(
                 f"Invalid field name matching mode '{self.mode}', supported types are 'plain' or 're'."
@@ -55,6 +46,25 @@ class IncludeFieldCondition(FieldNameProcessingCondition):
                 else:
                     e.args = (e.args[0] + msg,)
                 raise
+
+    def _clone_for_merge(self) -> Self:
+        clone = super()._clone_for_merge()
+        # Compiled patterns are immutable. The clone gets its own list but shares the compiled
+        # objects, which keeps value equality of the merged and source entries intact.
+        clone.patterns = list(self.patterns)
+        return clone
+
+    def _compile_patterns(self) -> None:
+        engine = self.resolve_regex_engine()
+        compiled = []
+        for field_pattern in self.fields:
+            try:
+                compiled.append(engine.compile(field_pattern))
+            except engine.error as e:
+                raise SigmaConfigurationError(
+                    f"Regular expression '{field_pattern}' in field name condition is invalid: {e}"
+                ) from e
+        self.patterns = compiled
 
 
 @dataclass

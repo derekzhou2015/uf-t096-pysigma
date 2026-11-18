@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import (
@@ -8,6 +9,7 @@ from typing import (
     ClassVar,
     Iterable,
     Optional,
+    Self,
     Union,
     cast,
     TYPE_CHECKING,
@@ -103,6 +105,17 @@ class ConditionExpression(ABC):
         else:
             raise SigmaError("Pipeline already set for condition expression.")
 
+    def _clone_for_merge(self) -> Self:
+        """Return an unbound copy of this expression tree.
+
+        The copy is created for a merged processing pipeline and must not reference condition
+        objects or pipelines of the source pipeline. Identifiers are re-bound to the cloned
+        conditions by the owning processing item with :meth:`resolve`.
+        """
+        clone: Self = copy.copy(self)
+        clone.pipeline = None
+        return clone
+
 
 @dataclass
 class ConditionIdentifier(ConditionExpression):
@@ -174,6 +187,14 @@ class ConditionIdentifier(ConditionExpression):
             )
         return self._condition.match_field_name(field_name)
 
+    def _clone_for_merge(self) -> Self:
+        """Copy the identifier expression without referencing the condition object it was
+        resolved against. ``resolve`` must be invoked on the copy to bind it to the conditions
+        of the merged processing item."""
+        clone = super()._clone_for_merge()
+        clone._condition = ProcessingCondition()
+        return clone
+
 
 @dataclass
 class BinaryConditionOp(ConditionExpression):
@@ -222,6 +243,12 @@ class BinaryConditionOp(ConditionExpression):
         return self.__class__._function(
             [self.left.match_field_name(field_name), self.right.match_field_name(field_name)]
         )
+
+    def _clone_for_merge(self) -> Self:
+        clone = super()._clone_for_merge()
+        clone.left = self.left._clone_for_merge()
+        clone.right = self.right._clone_for_merge()
+        return clone
 
 
 @dataclass
@@ -272,6 +299,11 @@ class ConditionNOT(ConditionExpression):
 
     def match_field_name(self, field_name: str | None) -> bool:
         return not self.condition.match_field_name(field_name)
+
+    def _clone_for_merge(self) -> Self:
+        clone = super()._clone_for_merge()
+        clone.condition = self.condition._clone_for_merge()
+        return clone
 
 
 def parse_condition_expression(

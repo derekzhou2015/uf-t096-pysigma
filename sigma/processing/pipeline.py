@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from collections import defaultdict
 from dataclasses import dataclass, field
 from functools import partial
@@ -11,9 +12,11 @@ from typing import (
     Any,
     Callable,
     Iterable,
-    Tuple,
     Optional,
+    Self,
+    Tuple,
     Type,
+    TypeVar,
     Union,
     cast,
     TYPE_CHECKING,
@@ -58,6 +61,20 @@ from sigma.types import SigmaFieldReference, SigmaType
 if TYPE_CHECKING:
     from sigma.policy.regex_engine import RegexEngine
     from sigma.policy import SigmaPolicy
+
+_ConditionT = TypeVar("_ConditionT", bound=ProcessingCondition)
+
+
+def _clone_condition_collection(
+    conditions: list[_ConditionT] | dict[str, _ConditionT],
+) -> list[_ConditionT] | dict[str, _ConditionT]:
+    """Clone a list or dict of processing conditions, preserving the collection type."""
+    if isinstance(conditions, dict):
+        return {
+            identifier: cast(_ConditionT, condition._clone_for_merge())
+            for identifier, condition in conditions.items()
+        }
+    return [cast(_ConditionT, condition._clone_for_merge()) for condition in conditions]
 
 
 @dataclass
@@ -422,6 +439,29 @@ class ProcessingItemBase:
             for rule_condition in self.rule_conditions.values():
                 rule_condition._clear_pipeline()
 
+    def _clone_for_merge(self) -> Self:
+        """Create an unbound copy of this processing item for use in a merged pipeline.
+
+        The copy keeps the configuration (identifier, conditions, transformation parameters)
+        but is detached from the pipeline this item belongs to. Its transformation and
+        condition objects are copied as well, so that binding the copy to the merged pipeline
+        doesn't affect the source item. The returned item is not yet bound to a pipeline; this
+        is done by the processing pipeline containing it.
+        """
+        clone: Self = copy.copy(self)
+        clone._pipeline = None
+        clone.rule_conditions = _clone_condition_collection(self.rule_conditions)
+        if self.rule_condition_expression is not None:
+            clone.rule_condition_expression = self.rule_condition_expression._clone_for_merge()
+            clone._resolve_condition_expression(
+                clone.rule_condition_expression,
+                cast(dict[str, ProcessingCondition], clone.rule_conditions),
+                "Rule condition",
+            )
+        clone.transformation = self.transformation._clone_for_merge()
+        clone.transformation.set_processing_item(clone)
+        return clone
+
 
 @dataclass
 class ProcessingItem(ProcessingItemBase):
@@ -563,6 +603,40 @@ class ProcessingItem(ProcessingItemBase):
             field_name_conditions = self.field_name_conditions
         for field_name_condition in field_name_conditions:
             field_name_condition._clear_pipeline()
+
+    def _clone_for_merge(self) -> Self:
+        clone = super()._clone_for_merge()
+        # ProcessingItem-specific condition collections and expressions. They are copied as
+        # well, so that binding the clone to a merged pipeline doesn't touch the source item.
+        clone.detection_item_conditions = _clone_condition_collection(
+            self.detection_item_conditions
+        )
+        if self.detection_item_condition_expression is not None:
+            clone.detection_item_condition_expression = (
+                self.detection_item_condition_expression._clone_for_merge()
+            )
+            clone._resolve_condition_expression(
+                clone.detection_item_condition_expression,
+                cast(
+                    dict[str, ProcessingCondition] | list[ProcessingCondition],
+                    clone.detection_item_conditions,
+                ),
+                "Detection item condition",
+            )
+        clone.field_name_conditions = _clone_condition_collection(self.field_name_conditions)
+        if self.field_name_condition_expression is not None:
+            clone.field_name_condition_expression = (
+                self.field_name_condition_expression._clone_for_merge()
+            )
+            clone._resolve_condition_expression(
+                clone.field_name_condition_expression,
+                cast(
+                    dict[str, ProcessingCondition] | list[ProcessingCondition],
+                    clone.field_name_conditions,
+                ),
+                "Field name condition",
+            )
+        return clone
 
     def apply(self, rule: SigmaRule | SigmaCorrelationRule) -> bool:
         """
@@ -1010,9 +1084,27 @@ class ProcessingPipeline:
             return False
         return processing_item_id in self.field_name_applied_ids[field]
 
+    def _clone_items_for_merge(self) -> list[ProcessingItem]:
+        """Create unbound copies of all preprocessing items for use in a merged pipeline."""
+        return [item._clone_for_merge() for item in self.items]
+
+    def _clone_postprocessing_items_for_merge(self) -> list[QueryPostprocessingItem]:
+        """Create unbound copies of all postprocessing items for use in a merged pipeline."""
+        return [item._clone_for_merge() for item in self.postprocessing_items]
+
+    def _clone_finalizers_for_merge(self) -> list[Finalizer]:
+        """Create unbound copies of all finalizers for use in a merged pipeline."""
+        return [finalizer._clone_for_merge() for finalizer in self.finalizers]
+
     def __add__(self, other: "ProcessingPipeline" | None) -> "ProcessingPipeline":
         """
         Concatenate two processing pipelines and merge their variables.
+
+        The merged pipeline contains copies of all processing items, postprocessing items and
+        finalizers of both operands. The operands themselves are not modified: they keep their
+        items and their bindings to the pipeline they belong to, so they behave exactly as if
+        they had never been part of a merge. This also allows to merge one base pipeline with
+        multiple different pipelines without the merge products influencing each other.
 
         **Note:** This method concatenates pipelines in the order specified and does NOT respect
         pipeline priorities. For combining multiple pipelines with different priority values,
@@ -1054,13 +1146,15 @@ class ProcessingPipeline:
         else:
             merged_policy = self.policy or other.policy
 
-        self._clear_pipeline()
-        other._clear_pipeline()
-
+        # The merged pipeline gets copies of all entries. Neither operand is modified, so it can
+        # be merged repeatedly and stays fully functional on its own.
         return self.__class__(
-            items=self.items + other.items,
-            postprocessing_items=self.postprocessing_items + other.postprocessing_items,
-            finalizers=self.finalizers + other.finalizers,
+            items=self._clone_items_for_merge() + other._clone_items_for_merge(),
+            postprocessing_items=(
+                self._clone_postprocessing_items_for_merge()
+                + other._clone_postprocessing_items_for_merge()
+            ),
+            finalizers=self._clone_finalizers_for_merge() + other._clone_finalizers_for_merge(),
             vars={**self.vars, **other.vars},
             policy=merged_policy,
         )

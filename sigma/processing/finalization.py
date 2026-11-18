@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+import copy
 from dataclasses import dataclass, field
 import json
-from typing import Any, Type, TYPE_CHECKING
+from typing import Any, Self, Type, TYPE_CHECKING
 
 import yaml
 from sigma.exceptions import SigmaConfigurationError, SigmaTransformationError
@@ -33,6 +34,16 @@ class Finalizer:
             self._pipeline = pipeline
         else:
             raise SigmaTransformationError("Pipeline for finalizer was already set.")
+
+    def _clone_for_merge(self) -> Self:
+        """Create an unbound copy of this finalizer for use in a merged pipeline.
+
+        The copy keeps the finalizer configuration but is detached from the pipeline it was
+        originally part of. Finalizers holding nested pipeline state must extend this method.
+        """
+        clone: Self = copy.copy(self)
+        clone._pipeline = None
+        return clone
 
     @abstractmethod
     def apply(self, queries: list[Any]) -> Any:
@@ -151,6 +162,17 @@ class NestedFinalizer(Finalizer):
 
     def apply(self, queries: list[Any]) -> Any:
         return self._nested_pipeline.finalize(queries)
+
+    def _clone_for_merge(self) -> Self:
+        from sigma.processing.pipeline import (
+            ProcessingPipeline,
+        )  # TODO: move to top after restructuring code.
+
+        clone = super()._clone_for_merge()
+        nested_finalizers = self._nested_pipeline._clone_finalizers_for_merge()
+        clone.finalizers = nested_finalizers
+        clone._nested_pipeline = ProcessingPipeline(finalizers=nested_finalizers)
+        return clone
 
 
 finalizers: dict[str, Type[Finalizer]] = {

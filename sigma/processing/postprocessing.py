@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import abstractmethod
 from dataclasses import dataclass, field
 import json
-from typing import Any, Type, TYPE_CHECKING
+from typing import Any, Self, Type, TYPE_CHECKING
 from sigma.correlations import SigmaCorrelationRule
 from sigma.exceptions import SigmaConfigurationError
 from sigma.policy.regex_engine import RegexPattern
@@ -189,6 +189,17 @@ class NestedQueryPostprocessingTransformation(QueryPostprocessingTransformation)
         if self._pipeline is not None:
             self._pipeline.applied_ids.update(self._nested_pipeline.applied_ids)
         return query
+
+    def _clone_for_merge(self) -> Self:
+        from sigma.processing.pipeline import (
+            ProcessingPipeline,
+        )  # TODO: move to top-level after restructuring code
+
+        clone = super()._clone_for_merge()
+        nested_items = self._nested_pipeline._clone_postprocessing_items_for_merge()
+        clone.items = nested_items
+        clone._nested_pipeline = ProcessingPipeline(postprocessing_items=nested_items)
+        return clone
 
 
 query_postprocessing_transformations: dict[str, Type[QueryPostprocessingTransformation]] = {

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import (
     Any,
+    Self,
     Union,
     TYPE_CHECKING,
 )
@@ -58,3 +59,16 @@ class NestedProcessingTransformation(PreprocessingTransformation):
         self._pipeline.field_name_applied_ids.update(self._nested_pipeline.field_name_applied_ids)
         self._pipeline.field_mappings.merge(self._nested_pipeline.field_mappings)
         self._pipeline.state.update(self._nested_pipeline.state)
+
+    def _clone_for_merge(self) -> Self:
+        from sigma.processing.pipeline import (
+            ProcessingPipeline,
+        )  # TODO: move to top-level after restructuring code
+
+        clone = super()._clone_for_merge()
+        # Rebuild the nested pipeline from copies so that the clone is independent of the
+        # source transformation and its items aren't bound to two pipelines.
+        clone._nested_pipeline = ProcessingPipeline(
+            items=self._nested_pipeline._clone_items_for_merge()
+        )
+        return clone

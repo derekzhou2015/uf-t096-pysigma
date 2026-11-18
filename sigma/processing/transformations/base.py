@@ -3,7 +3,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 import dataclasses
 import types
-from typing import Any, Iterable, Union, get_type_hints, TYPE_CHECKING
+from typing import Any, Iterable, Self, Union, get_type_hints, TYPE_CHECKING
 from dataclasses import dataclass, field
 from sigma.conditions import ConditionOR
 from sigma.correlations import SigmaCorrelationCondition, SigmaCorrelationRule
@@ -52,6 +52,18 @@ class Transformation(ProcessingRegularExpressionMixin, ABC):
 
     def _clear_pipeline(self) -> None:
         self._pipeline = None
+
+    def _clone_for_merge(self) -> Self:
+        """Create an unbound copy of this transformation for use in a merged pipeline.
+
+        The copy keeps all transformation parameters but is detached from the source pipeline
+        and processing item. Transformations holding mutable or pipeline-bound state must
+        extend this method.
+        """
+        clone = self._clone_without_regex_cache()
+        clone._pipeline = None
+        clone.processing_item = None
+        return clone
 
     def set_processing_item(self, processing_item: "ProcessingItemBase") -> None:
         self.processing_item = processing_item

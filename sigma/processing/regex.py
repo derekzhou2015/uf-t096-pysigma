@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass, field
-from typing import Any, cast, TYPE_CHECKING
+from typing import Any, Self, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from sigma.policy.regex_engine import RegexEngine, RegexPattern
@@ -21,6 +22,17 @@ class ProcessingRegularExpressionMixin:
 
     _re: RegexPattern | None = field(init=False, default=None, repr=False, compare=False)
     _re_engine: RegexEngine | None = field(init=False, default=None, repr=False, compare=False)
+
+    def _clone_without_regex_cache(self) -> Self:
+        """Create a shallow copy with reset compiled regex caches.
+
+        Compiled patterns are bound to the regex engine of the pipeline they were compiled
+        with. Copies must recompile if the engine differs, so the caches are cleared.
+        """
+        clone: Self = copy.copy(self)
+        clone._re = None
+        clone._re_engine = None
+        return clone
 
     def resolve_regex_engine(self) -> RegexEngine:
         """Return the effective regex engine for this processing context."""
