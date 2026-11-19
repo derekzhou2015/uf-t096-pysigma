@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from copy import deepcopy
 from dataclasses import dataclass, field
 from functools import partial
 import hashlib
@@ -58,6 +59,34 @@ from sigma.types import SigmaFieldReference, SigmaType
 if TYPE_CHECKING:
     from sigma.policy.regex_engine import RegexEngine
     from sigma.policy import SigmaPolicy
+
+
+def _clone_pipeline_items(
+    items: list[ProcessingItem],
+    postprocessing_items: list[QueryPostprocessingItem],
+    finalizers: list[Finalizer],
+) -> tuple[list[ProcessingItem], list[QueryPostprocessingItem], list[Finalizer]]:
+    """Deep-copy processing items, postprocessing items and finalizers and detach the
+    copies from any pipeline they were previously attached to.
+
+    Pipeline merges must leave the operands (and any pipeline registered in a resolver)
+    untouched. Sharing the item objects would rebind their internal pipeline backreferences
+    to the merged pipeline, so state-tracking transformations would silently write to the
+    wrong pipeline and repeated merges of the same base pipeline would cross-contaminate
+    each other. Deep copies give the merged pipeline its own, independently wired item tree
+    while dataclass value equality is unaffected because every backreference is excluded
+    from comparison.
+    """
+    cloned_items = deepcopy(items)
+    cloned_postprocessing_items = deepcopy(postprocessing_items)
+    cloned_finalizers = deepcopy(finalizers)
+    for processing_item in cloned_items:
+        processing_item._clear_pipeline()
+    for postprocessing_item in cloned_postprocessing_items:
+        postprocessing_item._clear_pipeline()
+    for finalizer in cloned_finalizers:
+        finalizer._pipeline = None
+    return cloned_items, cloned_postprocessing_items, cloned_finalizers
 
 
 @dataclass
@@ -1054,14 +1083,22 @@ class ProcessingPipeline:
         else:
             merged_policy = self.policy or other.policy
 
-        self._clear_pipeline()
-        other._clear_pipeline()
+        # Build the merged pipeline from detached deep copies instead of reusing the
+        # operand item objects. The operands keep owning their original items and their
+        # pipeline backreferences, so they continue to behave exactly as if they had
+        # never been merged (see _clone_pipeline_items).
+        self_items, self_postprocessing, self_finalizers = _clone_pipeline_items(
+            self.items, self.postprocessing_items, self.finalizers
+        )
+        other_items, other_postprocessing, other_finalizers = _clone_pipeline_items(
+            other.items, other.postprocessing_items, other.finalizers
+        )
 
         return self.__class__(
-            items=self.items + other.items,
-            postprocessing_items=self.postprocessing_items + other.postprocessing_items,
-            finalizers=self.finalizers + other.finalizers,
-            vars={**self.vars, **other.vars},
+            items=self_items + other_items,
+            postprocessing_items=self_postprocessing + other_postprocessing,
+            finalizers=self_finalizers + other_finalizers,
+            vars=deepcopy({**self.vars, **other.vars}),
             policy=merged_policy,
         )
 

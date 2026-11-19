@@ -1,4 +1,4 @@
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 import datetime
 import importlib.util
 import os
@@ -6,6 +6,7 @@ import re
 import sys
 import types
 import uuid
+from copy import deepcopy
 from string import Formatter
 from typing import Any, Callable, Dict, Iterable, Mapping, Sequence, TYPE_CHECKING
 
@@ -298,3 +299,17 @@ class TemplateBase:
             raise ValueError(f"Vars file {vars_path} must define a 'vars' dictionary")
 
         return module.vars
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "TemplateBase":
+        """Return an independent copy with a freshly compiled Jinja2 template.
+
+        A compiled :class:`jinja2.Template` can neither be copied nor pickled, so the
+        default dataclass deepcopy would fail. Reconstructing the object from the
+        declared dataclass fields re-runs ``__post_init__``, which rebuilds the
+        sandboxed environment and template and reapplies the same path/vars policy.
+        """
+        cls = self.__class__
+        copied_fields = {
+            f.name: deepcopy(getattr(self, f.name), memo) for f in fields(self) if f.init
+        }
+        return cls(**copied_fields)
