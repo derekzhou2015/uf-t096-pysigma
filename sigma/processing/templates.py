@@ -225,6 +225,17 @@ class TemplateBase:
             self.j2template.globals.update(custom_vars)
             env.add_trusted(custom_vars.values())
 
+    def __getstate__(self) -> dict[str, Any]:
+        # The compiled Jinja2 template is a cache derived from the dataclass fields and
+        # can't be pickled or deep-copied; drop it and recompile on restore.
+        state = self.__dict__.copy()
+        state.pop("j2template", None)
+        return state
+
+    def __setstate__(self, state: dict[str, Any]) -> None:
+        self.__dict__.update(state)
+        self.__post_init__()  # recompile j2template from the restored fields
+
     def _check_template_path(self, path: str) -> None:
         """Template directories from untrusted pipeline definitions must reside below one of the
         allowed base directories (by default the directory of the pipeline file)."""

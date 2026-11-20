@@ -30,6 +30,15 @@ class RegexEngine(ABC):
     def __hash__(self) -> int:
         return hash(type(self))
 
+    def __copy__(self) -> "RegexEngine":
+        # Engines are immutable, stateless strategy objects (equality is defined by
+        # type), so copying can safely return the same instance. This also keeps
+        # engine references (e.g. a cached module handle) out of deepcopy graphs.
+        return self
+
+    def __deepcopy__(self, memo: dict[int, Any]) -> "RegexEngine":
+        return self
+
     @abstractmethod
     def compile(self, pattern: str, flags: int = 0) -> RegexPattern:
         """Compile a regex pattern and return a compiled pattern object."""

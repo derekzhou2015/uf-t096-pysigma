@@ -1553,6 +1553,91 @@ def test_processingpipeline_concatenation_incompatible_policy():
         p1 + p2
 
 
+def _mapping_pipeline(src_field: str, dest_field: str, identifier: str) -> ProcessingPipeline:
+    """Pipeline with a single field mapping transformation, used by merge regression tests."""
+    return ProcessingPipeline(
+        items=[
+            ProcessingItem(
+                transformation=FieldMappingTransformation(mapping={src_field: dest_field}),
+                identifier=identifier,
+            )
+        ]
+    )
+
+
+def _apply_and_get_field(pipeline: ProcessingPipeline) -> tuple[str, dict]:
+    """Apply pipeline to a fresh rule and return (mapped detection item field, field mappings)."""
+    rule = SigmaRule.from_yaml(
+        dedent(
+            """
+            title: Test
+            status: test
+            logsource:
+                category: test
+            detection:
+                sel:
+                    fieldA: value
+                condition: sel
+            """
+        )
+    )
+    pipeline.apply(rule)
+    field = rule.detection.detections["sel"].detection_items[0].field
+    return field, dict(pipeline.field_mappings)
+
+
+def test_processingpipeline_concatenation_is_non_destructive():
+    """Merging must not detach or re-own the items of the operand pipelines."""
+    p1 = _mapping_pipeline("fieldA", "stage1", "map_one")
+    p2 = _mapping_pipeline("stage1", "stage2", "map_two")
+
+    merged = p1 + p2
+
+    # operands keep ownership of their items and transformations
+    assert all(item._pipeline is p1 for item in p1.items)
+    assert all(item.transformation._pipeline is p1 for item in p1.items)
+    assert all(item._pipeline is p2 for item in p2.items)
+    # merged pipeline owns its own (copied) items
+    assert all(item._pipeline is merged for item in merged.items)
+    assert merged.items[0] is not p1.items[0]
+    assert merged.items[1] is not p2.items[0]
+
+
+def test_processingpipeline_operand_behavior_unchanged_after_merge():
+    """An operand pipeline must behave after a merge as if it never took part in it."""
+    p1 = _mapping_pipeline("fieldA", "stage1", "map_one")
+    p2 = _mapping_pipeline("stage1", "stage2", "map_two")
+
+    baseline_field, baseline_mappings = _apply_and_get_field(p1)
+    merged = p1 + p2
+    field_after, mappings_after = _apply_and_get_field(p1)
+
+    assert (field_after, mappings_after) == (baseline_field, baseline_mappings)
+    # applying the operand must not leak tracking state into the merged pipeline
+    assert len(merged.field_mappings) == 0
+
+
+def test_processingpipeline_shared_operand_merges_are_independent():
+    """Multiple merges involving the same base pipeline must stay independent of each other."""
+    p1 = _mapping_pipeline("fieldA", "stage1", "map_one")
+    p2 = _mapping_pipeline("stage1", "stage2", "map_two")
+    p3 = _mapping_pipeline("stage1", "stage3", "map_three")
+
+    m1 = p1 + p2
+    m2 = p1 + p3
+
+    assert _apply_and_get_field(m1) == (
+        "stage2",
+        {"fieldA": {"stage2"}, "stage1": {"stage2"}},
+    )
+    assert _apply_and_get_field(m2) == (
+        "stage3",
+        {"fieldA": {"stage3"}, "stage1": {"stage3"}},
+    )
+    # value equality of merged products is preserved across repeated merges
+    assert p1 + p2 == m1
+
+
 def test_processingitem_match_detection_item_with_field_name_condition_expression(detection_item):
     processing_item = ProcessingItem(
         transformation=TransformationAppend(s="Test"),
